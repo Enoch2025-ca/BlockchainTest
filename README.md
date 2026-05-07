@@ -1,6 +1,6 @@
 # Blockchain Point of Sale (POS) System
 
-A comprehensive blockchain-based Point of Sale system built with Solidity smart contracts and Node.js. This system enables secure, transparent transactions using ERC20 tokens on the Ethereum blockchain.
+A comprehensive blockchain-based Point of Sale system built with Solidity smart contracts and Node.js. This system enables secure, transparent transactions using ERC20 tokens on the Ethereum blockchain. To provide clients with a points system to purchase ideas instore 
 
 ## Features
 
