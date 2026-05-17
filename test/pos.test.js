@@ -154,16 +154,19 @@ describe("POSSystem", function () {
     });
 
     it("Should complete payment successfully", async function () {
-      await expect(posSystem.connect(customer).completePayment(0))
+      await expect(
+        posSystem.connect(customer).completePayment(0, 0, "")
+      )
         .to.emit(posSystem, "OrderCompleted")
-        .withArgs(0, merchant.address, ethers.parseEther("5"));
+        .withArgs(0, merchant.address, ethers.parseEther("5"), 0);
 
       const order = await posSystem.getOrder(0);
       expect(order.status).to.equal(1); // Completed
+      expect(order.paymentMethod).to.equal(0);
     });
 
     it("Should deduct platform fee from merchant", async function () {
-      await posSystem.connect(customer).completePayment(0);
+      await posSystem.connect(customer).completePayment(0, 0, "");
 
       const platformFee = ethers.parseEther("5") / 50n; // 2% fee
       const expectedMerchantAmount = ethers.parseEther("5") - platformFee;
@@ -176,16 +179,70 @@ describe("POSSystem", function () {
 
     it("Should fail if non-customer tries to pay", async function () {
       await expect(
-        posSystem.connect(merchant).completePayment(0)
+        posSystem.connect(merchant).completePayment(0, 0, "")
       ).to.be.revertedWith("Only customer can pay");
     });
 
     it("Should fail if order already completed", async function () {
-      await posSystem.connect(customer).completePayment(0);
+      await posSystem.connect(customer).completePayment(0, 0, "");
 
       await expect(
-        posSystem.connect(customer).completePayment(0)
+        posSystem.connect(customer).completePayment(0, 0, "")
       ).to.be.revertedWith("Order already processed");
+    });
+  });
+
+  describe("Cash and Interac Payments", function () {
+    beforeEach(async function () {
+      const itemNames = ["Lunch"];
+      const quantities = [1];
+      const prices = [ethers.parseEther("10")];
+
+      await posSystem
+        .connect(customer)
+        .createOrder(merchant.address, itemNames, quantities, prices);
+
+      // Fund the reward pool so cash and Interac purchases can issue tokens
+      await posToken
+        .connect(owner)
+        .approve(await posSystem.getAddress(), ethers.parseEther("10"));
+      await posSystem.connect(owner).fundRewardPool(ethers.parseEther("10"));
+    });
+
+    it("Should complete a cash payment and reward the customer", async function () {
+      const initialBalance = await posToken.balanceOf(customer.address);
+
+      await expect(
+        posSystem.connect(customer).completePayment(0, 1, "CASH-REF-001")
+      )
+        .to.emit(posSystem, "OrderCompleted")
+        .withArgs(0, merchant.address, ethers.parseEther("10"), 1);
+
+      const order = await posSystem.getOrder(0);
+      expect(order.paymentMethod).to.equal(1);
+      expect(order.rewardAmount).to.equal(ethers.parseEther("0.1"));
+
+      const finalBalance = await posToken.balanceOf(customer.address);
+      expect(finalBalance).to.equal(initialBalance + ethers.parseEther("0.1"));
+    });
+
+    it("Should complete an Interac purchase and reward the customer", async function () {
+      await expect(
+        posSystem.connect(customer).completePayment(0, 2, "INTERAC-REF-001")
+      )
+        .to.emit(posSystem, "OrderCompleted")
+        .withArgs(0, merchant.address, ethers.parseEther("10"), 2);
+
+      const order = await posSystem.getOrder(0);
+      expect(order.paymentMethod).to.equal(2);
+      expect(order.paymentReference).to.equal("INTERAC-REF-001");
+      expect(order.rewardAmount).to.equal(ethers.parseEther("0.1"));
+    });
+
+    it("Should fail cash payment without reference", async function () {
+      await expect(
+        posSystem.connect(customer).completePayment(0, 1, "")
+      ).to.be.revertedWith("Payment reference required");
     });
   });
 
@@ -226,7 +283,7 @@ describe("POSSystem", function () {
         .connect(customer)
         .createOrder(merchant.address, itemNames, quantities, prices);
 
-      await posSystem.connect(customer).completePayment(0);
+      await posSystem.connect(customer).completePayment(0, 0, "");
     });
 
     it("Should withdraw merchant funds", async function () {
@@ -261,7 +318,7 @@ describe("POSSystem", function () {
         .connect(customer)
         .createOrder(merchant.address, itemNames, quantities, prices);
 
-      await posSystem.connect(customer).completePayment(0);
+      await posSystem.connect(customer).completePayment(0, 0, "");
 
       const platformFee = (ethers.parseEther("100") * 5n) / 100n;
       const expectedMerchantAmount = ethers.parseEther("100") - platformFee;
