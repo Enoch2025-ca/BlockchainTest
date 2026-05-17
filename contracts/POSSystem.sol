@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
 /**
@@ -16,6 +16,12 @@ contract POSSystem is ReentrancyGuard, Ownable {
         Pending,
         Completed,
         Cancelled
+    }
+
+    enum PaymentMethod {
+        Token,
+        Cash,
+        Interac
     }
 
     struct OrderItem {
@@ -33,7 +39,9 @@ contract POSSystem is ReentrancyGuard, Ownable {
         uint256 totalAmount;
         uint256 timestamp;
         OrderStatus status;
-        string transactionHash;
+        PaymentMethod paymentMethod;
+        string paymentReference;
+        uint256 rewardAmount;
     }
 
     mapping(uint256 => Order) public orders;
@@ -43,6 +51,7 @@ contract POSSystem is ReentrancyGuard, Ownable {
 
     uint256 public orderCount = 0;
     uint256 public platformFeePercentage = 2; // 2% fee
+    uint256 public rewardRatePercentage = 1; // 1% customer rewards
 
     event OrderCreated(
         uint256 indexed orderId,
@@ -53,13 +62,16 @@ contract POSSystem is ReentrancyGuard, Ownable {
     event OrderCompleted(
         uint256 indexed orderId,
         address indexed merchant,
-        uint256 amount
+        uint256 amount,
+        PaymentMethod paymentMethod
     );
     event OrderCancelled(uint256 indexed orderId);
     event FundWithdrawn(address indexed merchant, uint256 amount);
     event PlatformFeeUpdated(uint256 newFeePercentage);
+    event RewardRateUpdated(uint256 newRewardRate);
+    event RewardsFunded(uint256 amount);
 
-    constructor(address _tokenAddress) {
+    constructor(address _tokenAddress) Ownable(msg.sender) {
         posToken = IERC20(_tokenAddress);
     }
 
@@ -119,7 +131,11 @@ contract POSSystem is ReentrancyGuard, Ownable {
     /**
      * @dev Complete payment for an order
      */
-    function completePayment(uint256 orderId) external nonReentrant {
+    function completePayment(
+        uint256 orderId,
+        PaymentMethod paymentMethod,
+        string calldata paymentReference
+    ) external nonReentrant {
         Order storage order = orders[orderId];
 
         require(order.customer != address(0), "Order does not exist");
@@ -130,21 +146,84 @@ contract POSSystem is ReentrancyGuard, Ownable {
         );
 
         uint256 totalAmount = order.totalAmount;
-        uint256 platformFee = (totalAmount * platformFeePercentage) / 100;
-        uint256 merchantAmount = totalAmount - platformFee;
+        uint256 rewardAmount = (totalAmount * rewardRatePercentage) / 100;
 
-        // Transfer tokens from customer to contract
-        require(
-            posToken.transferFrom(msg.sender, address(this), totalAmount),
-            "Payment failed"
-        );
+        order.paymentMethod = paymentMethod;
+        order.paymentReference = paymentReference;
+        order.rewardAmount = rewardAmount;
 
-        // Add merchant balance
-        merchantBalance[order.merchant] += merchantAmount;
+        if (paymentMethod == PaymentMethod.Token) {
+            uint256 platformFee = (totalAmount * platformFeePercentage) / 100;
+            require(
+                rewardAmount <= platformFee,
+                "Reward rate cannot exceed platform fee"
+            );
+            uint256 merchantAmount = totalAmount - platformFee;
+
+            require(
+                posToken.transferFrom(msg.sender, address(this), totalAmount),
+                "Payment failed"
+            );
+
+            merchantBalance[order.merchant] += merchantAmount;
+
+            if (rewardAmount > 0) {
+                require(
+                    posToken.transfer(msg.sender, rewardAmount),
+                    "Reward transfer failed"
+                );
+            }
+        } else {
+            require(
+                bytes(paymentReference).length > 0,
+                "Payment reference required"
+            );
+
+            if (rewardAmount > 0) {
+                require(
+                    posToken.balanceOf(address(this)) >= rewardAmount,
+                    "Insufficient reward pool"
+                );
+                require(
+                    posToken.transfer(msg.sender, rewardAmount),
+                    "Reward transfer failed"
+                );
+            }
+        }
 
         order.status = OrderStatus.Completed;
 
-        emit OrderCompleted(orderId, order.merchant, totalAmount);
+        emit OrderCompleted(orderId, order.merchant, totalAmount, paymentMethod);
+    }
+
+    /**
+     * @dev Fund reward pool to reward customers for cash or Interac purchases
+     */
+    function fundRewardPool(uint256 amount) external onlyOwner {
+        require(amount > 0, "Amount must be greater than zero");
+        require(
+            posToken.transferFrom(msg.sender, address(this), amount),
+            "Funding failed"
+        );
+
+        emit RewardsFunded(amount);
+    }
+
+    /**
+     * @dev Set reward rate percentage
+     */
+    function setRewardRate(uint256 newRewardRate) external onlyOwner {
+        require(newRewardRate <= platformFeePercentage, "Reward too high");
+        rewardRatePercentage = newRewardRate;
+
+        emit RewardRateUpdated(newRewardRate);
+    }
+
+    /**
+     * @dev Get reward pool balance
+     */
+    function getRewardPoolBalance() external view returns (uint256) {
+        return posToken.balanceOf(address(this));
     }
 
     /**
@@ -246,6 +325,10 @@ contract POSSystem is ReentrancyGuard, Ownable {
      */
     function setPlatformFee(uint256 newFeePercentage) external onlyOwner {
         require(newFeePercentage <= 10, "Fee too high");
+        require(
+            newFeePercentage >= rewardRatePercentage,
+            "Fee lower than reward rate"
+        );
         platformFeePercentage = newFeePercentage;
 
         emit PlatformFeeUpdated(newFeePercentage);

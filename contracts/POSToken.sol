@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
@@ -12,7 +12,7 @@ contract POSToken is ERC20, Ownable {
     event TokensMinted(address indexed to, uint256 amount);
     event TokensBurned(address indexed from, uint256 amount);
 
-    constructor(uint256 initialSupply) ERC20("POS Token", "POS") {
+    constructor(uint256 initialSupply) ERC20("POS Token", "POS") Ownable(msg.sender) {
         _mint(msg.sender, initialSupply * 10 ** decimals());
     }
 

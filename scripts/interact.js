@@ -39,6 +39,12 @@ async function main() {
   console.log("  Customer:", hre.ethers.formatEther(customerBalance), "POS");
   console.log();
 
+  const PaymentMethod = {
+    Token: 0,
+    Cash: 1,
+    Interac: 2,
+  };
+
   // Distribute tokens to customer
   console.log("📤 Distributing tokens to customer...");
   const distributeAmount = hre.ethers.parseEther("1000");
@@ -96,10 +102,38 @@ async function main() {
   console.log();
 
   // Complete payment
-  console.log("💳 Completing payment...");
-  tx = await posSystem.connect(customer).completePayment(0);
+  console.log("💳 Completing token payment...");
+  tx = await posSystem
+    .connect(customer)
+    .completePayment(0, PaymentMethod.Token, "");
   await tx.wait();
-  console.log("✅ Payment completed!");
+  console.log("✅ Token payment completed!");
+  console.log();
+
+  // Fund the reward pool for cash and Interac purchases
+  console.log("🎁 Funding reward pool for cash/Interac purchases...");
+  const rewardPoolAmount = hre.ethers.parseEther("20");
+  await posToken.connect(owner).approve(systemAddress, rewardPoolAmount);
+  tx = await posSystem.connect(owner).fundRewardPool(rewardPoolAmount);
+  await tx.wait();
+  console.log("✅ Reward pool funded with", hre.ethers.formatEther(rewardPoolAmount), "POS");
+  console.log();
+
+  // Create a cash order and complete payment with reward tokens
+  console.log("💵 Creating cash order and rewarding customer...");
+  const cashItemNames = ["Snack"];
+  const cashQuantities = [1];
+  const cashPrices = [hre.ethers.parseEther("2")];
+  tx = await posSystem
+    .connect(customer)
+    .createOrder(merchant.address, cashItemNames, cashQuantities, cashPrices);
+  await tx.wait();
+
+  tx = await posSystem
+    .connect(customer)
+    .completePayment(1, PaymentMethod.Cash, "CASH-REF-001");
+  await tx.wait();
+  console.log("✅ Cash payment completed and rewards issued!");
   console.log();
 
   // Check merchant balance
